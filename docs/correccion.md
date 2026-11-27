@@ -1,279 +1,100 @@
-# Ejemplo de informe de corrección
+# Informe de corrección
 
-Fundamentos de Programación Funcional y Concurrente.
-Documento realizado por el docente Juan Francisco Díaz.
+Notación: el sistema es $s = (s_0, \dots, s_{n-1})$ con $s_i = (x_i, v_i, m_i)$. Un tramo es el intervalo $[a, b)$ de índices. Para $a<b$ se define $\mu(a,b) = a + \lfloor (b-a)/2 \rfloor$, el `medio` del código.
 
-## 1. Argumentar la corrección de programas recursivos
+## 1. Punto 1: un paso de la simulación
 
-Sea $f : A \to B$ una función, y $A$ un conjunto definido recursivamente
-(recordar la definición de Matemáticas Discretas I), como por ejemplo los
-naturales o las listas.
+**Especificación.** $\text{paso}(s, dt)_i = (x_i + v_i\,dt,\ v_i,\ m_i)$ para todo $0 \le i < n$.
 
-Sea $P_f$ un programa recursivo (lineal o en árbol) desarrollado en Scala (o en
-cualquier lenguaje de programación) hecho para calcular $f$:
+**`pasoSegmento(s, dt, a, b)`** devuelve el arreglo $r$ de longitud $b-a$ con $r_j = \text{paso}(s,dt)_{a+j}$, por construcción con `Array.tabulate`. Por tanto `pasoSecuencial` $=$ `pasoSegmento(s, dt, 0, n)` cumple la especificación.
 
-```scala
-def Pf(a: A): B = { // Pf recibe a de tipo A, y devuelve f(a) de tipo B
-  ...
-}
-```
+### Lema 1: partir en segmentos no pierde ni repite partículas
 
-¿Cómo argumentar que $P_f(a)$ siempre devuelve $f(a)$ como respuesta? Es decir,
-¿cómo argumentar que $P_f$ es correcto con respecto a su especificación?
+Sea $a<b$ y $\mu = \mu(a,b)$. Entonces $a < \mu < b$ cuando $b-a \ge 2$, y
 
-La respuesta es sencilla: demostrando el siguiente teorema.
+$$[a,b) = [a,\mu) \,\cup\, [\mu,b), \qquad [a,\mu) \cap [\mu,b) = \varnothing .$$
 
-```math
-\forall a \in A : P_f(a) == f(a)
-```
+*Prueba.* Todo $i$ con $a \le i < \mu$ no cumple $i \ge \mu$ y viceversa, así que los intervalos son disjuntos. Todo $i$ en $[a,b)$ cumple $i<\mu$ o $i\ge\mu$, así que la unión es el intervalo completo. $\mu>a$ porque $\lfloor (b-a)/2\rfloor \ge 1$ si $b-a\ge2$, y $\mu<b$ porque $\lfloor (b-a)/2\rfloor < b-a$. Por eso ambas llamadas recursivas reciben un tramo estrictamente más corto. $\square$
 
-Cuando uno tiene que demostrar que algo se cumple para todos los elementos de
-un conjunto definido recursivamente, es natural usar inducción estructural. En
-términos prácticos, esto significa demostrar que:
+### Teorema 1: `pasoParalelo` $=$ `pasoSecuencial`
 
-- Para cada valor básico $a$ de $A$, se tiene que $P_f(a) == f(a)$.
-- Para cada valor $a \in A$ construido recursivamente a partir de otro(s)
-  valor(es) $a' \in A$, se tiene que
-  $P_f(a') == f(a') \rightarrow P_f(a) == f(a)$. (Esta es la hipótesis de
-  inducción).
+Se prueba por inducción fuerte sobre $\ell = b-a$ que `rec(a,b)` $=$ `pasoSegmento(s,dt,a,b)`, para cualquier umbral $u\ge1$ (el código usa $\max(1,u)$).
 
-### Ejemplo: factorial recursivo
+- **Base** ($\ell \le u$): `rec` llama directamente a `pasoSegmento`.
+- **Paso** ($\ell > u \ge 1$, luego $\ell\ge2$): por el Lema 1, los tramos $[a,\mu)$ y $[\mu,b)$ son más cortos. Por hipótesis, `rec(a,μ)` y `rec(μ,b)` valen `pasoSegmento` de esos tramos. Como cada uno calcula el mismo valor ya sea en secuencial o en otra tarea (las funciones solo leen $s$ y no hay estado compartido modificado), el par que devuelve `parallel` es el mismo. La concatenación $\text{izq}\,\Vert\,\text{der}$ tiene en las posiciones $0..\mu-a-1$ los elementos $\text{paso}_{a}, \dots, \text{paso}_{\mu-1}$ y a continuación $\text{paso}_{\mu},\dots,\text{paso}_{b-1}$: exactamente `pasoSegmento(s,dt,a,b)`.
 
-Sea $f : \mathbb{N} \to \mathbb{N}$ la función que calcula el factorial de un
-número natural, es decir, $f(n) = n!$. Y sea $P_f$ el siguiente programa en
-Scala:
+Con $a=0$, $b=n$ se obtiene el resultado. Vale para todo $u$ y todo $dt$. Con $u\ge n$ no hay llamada a `parallel`, y el cálculo coincide con `pasoSecuencial` operación por operación. $\blacksquare$
 
-```scala
-def Pf(n: Int): Int = { // Pf recibe n de tipo Int, y devuelve n! de tipo Int
-  if (n == 0) 1 else n * Pf(n - 1)
-}
-```
+## 2. Punto 2: magnitudes globales
 
-Vamos a demostrar que $\forall n \in \mathbb{N} : P_f(n) == n!$
+- $E(s) = \sum_{i} \tfrac12 m_i \lVert v_i \rVert^2$. `energiaSecuencial` es el `foldLeft` de esa suma; el vacío da $0$.
+- $M(s) = \sum_i m_i$.
+- $C(s) = \dfrac{\sum_i m_i\,x_i}{M(s)}$ si $M(s)\ne0$, y $C(s)=(0,0)$ si $M(s)=0$. Se acumula el par $(S,M)=(\sum m_ix_i,\ \sum m_i)$ y se divide una vez.
 
-**Caso base:** $n = 0$
+### Corrección del recorrido secuencial de un tramo (invariante)
 
-```math
-P_f(0) \rightarrow \text{if } (0 == 0)\ 1 \text{ else } 0 \ast P_f(-1) \rightarrow 1
-```
+Las hojas de `energiaParalela` y `centroDeMasaParalelo` recorren el tramo $[a,b)$ con un `foldLeft`. Se argumenta como un proceso iterativo:
 
-Por otro lado, $f(0) = 0! = 1$. Entonces $P_f(0) == f(0)$.
+- Estado: $s=(i,\ acc)$, con $acc$ la energía acumulada (para el centro de masa, el par $(S,M)$).
+- Estado inicial: $s_0=(a,\ 0)$.
+- Estado final: $i=b$.
+- Transformación: $\text{transformar}(i,acc)=(i+1,\ acc+e(s_i))$, con $e(s_i)=\tfrac12 m_i\lVert v_i\rVert^2$.
+- Invariante: $\text{Inv}(i,acc)\equiv a\le i\le b\ \land\ acc=\sum_{j=a}^{i-1}e(s_j)$.
 
-**Caso de inducción:** $n = k + 1$, $k \geq 0$. Hay que demostrar:
-$P_f(k) == f(k) \rightarrow P_f(k + 1) == f(k + 1)$
+**1.** $\text{Inv}(s_0)$: con $i=a$ el rango $j=a,\dots,a-1$ es vacío, y $acc=0$ es la suma vacía.
 
-```math
-P_f(k+1) \rightarrow \text{if } (k+1 == 0)\ 1 \text{ else } (k+1) \ast P_f(k) \rightarrow (k+1) \ast P_f(k)
-```
+**2.** Si $\text{Inv}(i,acc)$ e $i<b$, entonces el nuevo estado es $(i+1,\ acc+e(s_i))$. Se cumple $a\le i+1\le b$ y
+$$acc+e(s_i)=\sum_{j=a}^{i-1}e(s_j)+e(s_i)=\sum_{j=a}^{i}e(s_j).$$
 
-Usando la hipótesis de inducción (HI):
+**3.** En el estado final $i=b$, la invariante da $acc=\sum_{j=a}^{b-1}e(s_j)$, que es lo que el tramo debe devolver.
 
-```math
-\rightarrow (k+1) \ast k! = (k+1)!
-```
+**4.** Terminación: en cada paso $b-i$ baja en 1, así que se llega a $i=b$ tras $b-a$ pasos.
 
-Por lo tanto, $P_f(k + 1) == f(k + 1)$.
+El mismo argumento vale para el centro de masa cambiando $e(s_i)$ por el par $(m_i x_i,\ m_i)$ y la suma por $\oplus$.
 
-Concluimos por inducción que $\forall n \in \mathbb{N} : P_f(n) == n!$
+## 3. Punto 3: por qué la suma sí se reparte y el promedio no
 
-### Ejemplo: el máximo de una lista
+### 3.1 La operación de combinación es asociativa (y tiene neutro)
 
-Sea $f : \text{List}[\mathbb{N}] \to \mathbb{N}$ la función que calcula el
-máximo de una lista de enteros positivos, no vacía. Y sea $P_f$ el siguiente
-programa en Scala:
+Para `energiaParalela` se combina con $+$ en $\mathbb{R}$. Para `centroDeMasaParalelo` se combina con $\oplus$ sobre pares $(S,M)\in\mathbb{R}^2\times\mathbb{R}$:
 
-```scala
-def maxLin(l: List[Int]): Int = {
-  if (l.tail.isEmpty) l.head
-  else math.max(maxLin(l.tail), l.head)
-}
-```
+$$(S_1,M_1)\oplus(S_2,M_2) = (S_1+S_2,\ M_1+M_2).$$
 
-Demostraremos que:
+Es suma componente a componente, y la suma de reales es asociativa y conmutativa:
 
-```math
-\forall n \in \mathbb{N} \setminus \{0\} : P_f(\text{List}(a_1, a_2, \ldots, a_n)) == f(\text{List}(a_1, a_2, \ldots, a_n))
-```
+$$\big((S_1,M_1)\oplus(S_2,M_2)\big)\oplus(S_3,M_3) = (S_1+S_2+S_3,\ M_1+M_2+M_3) = (S_1,M_1)\oplus\big((S_2,M_2)\oplus(S_3,M_3)\big).$$
 
-**Caso base:** $n = 1$
+El neutro es $((0,0),0)$ (tramo vacío). Por eso no importa cómo se agrupen los tramos: cualquier árbol de partición da la misma suma total, que es la del secuencial.
 
-```math
-P_f(\text{List}(a_1)) \rightarrow \text{if } \text{List}(a_1).\text{tail.isEmpty then } \text{List}(a_1).\text{head else } \ldots \rightarrow \text{List}(a_1).\text{head} \rightarrow a_1
-```
+### 3.2 El promedio no es combinable directamente
 
-Por otro lado, $f(\text{List}(a_1)) = a_1$. Entonces
-$P_f(\text{List}(a_1)) == f(\text{List}(a_1))$.
+Sean dos tramos con centros $c_1,c_2$ y masas $M_1,M_2$. El centro del conjunto es
 
-**Caso de inducción:** $n = k + 1$, $k \geq 1$. Se debe demostrar:
+$$C = \frac{S_1+S_2}{M_1+M_2} = \frac{M_1 c_1 + M_2 c_2}{M_1+M_2},$$
 
-```math
-P_f(\text{List}(b_1, b_2, \ldots, b_k)) == f(\text{List}(b_1, b_2, \ldots, b_k)) \rightarrow P_f(\text{List}(a_1, a_2, \ldots, a_{k+1})) == f(\text{List}(a_1, a_2, \ldots, a_{k+1}))
-```
+que solo es el promedio simple $\frac{c_1+c_2}{2}$ cuando $M_1=M_2$. Además, el "promedio de dos promedios" no es asociativo: $\operatorname{prom}(\operatorname{prom}(a,b),c)\ne\operatorname{prom}(a,\operatorname{prom}(b,c))$ en general: con $a=0,b=0,c=12$ el primero da $6$ y el segundo da $3$.
 
-Empecemos por calcular qué devuelve $P_f$ usando el modelo de sustitución:
+**Contraejemplo con partículas.** $P_1$ en $(0,0)$ con masa $1$ y $P_2$ en $(10,0)$ con masa $3$. Promediando cada mitad: $(0+10)/2=5$. Con la suma ponderada: $(0\cdot1+10\cdot3)/(1+3)=7.5$. El valor correcto es $7.5$; el promedio de promedios da $5$. Por eso se reparte el par $(S,M)$ y se divide una sola vez en la raíz.
 
-```math
-P_f(L) \rightarrow \text{if } L.\text{tail.isEmpty then } L.\text{head else math.max}(P_f(L.\text{tail}), L.\text{head})
-```
+### 3.3 Teorema 2: las versiones paralelas coinciden con las secuenciales
 
-```math
-\rightarrow \text{math.max}(P_f(\text{List}(a_2, \ldots, a_{k+1})), a_1)
-```
+Por inducción sobre $\ell=b-a$, igual que el Teorema 1: `rec(a,b)` devuelve $\sum_{i=a}^{b-1} f(s_i)$ con $f$ la contribución de cada partícula (energía, o el par $(m_ix_i,m_i)$).
 
-Sea $b = P_f(\text{List}(a_2, \ldots, a_{k+1}))$; por la hipótesis de
-inducción, $b = f(\text{List}(a_2, \ldots, a_{k+1}))$. Hay dos posibilidades:
+- Base ($\ell\le u$): el segmento recorre justo $a,\dots,b-1$.
+- Paso: por el Lema 1, $\sum_{i=a}^{b-1} f(s_i) = \sum_{i=a}^{\mu-1} f(s_i) + \sum_{i=\mu}^{b-1} f(s_i)$, y por hipótesis cada sumando es lo que devuelve la rama correspondiente. La combinación $+$ o $\oplus$ es asociativa (3.1), así que el resultado es la suma sobre $[0,n)$. En el centro de masa se divide después, una vez, entre $M$.
 
-- Si $\text{math.max}(b, a_1) = b$, entonces $b \geq a_1$ y
- $b == f(\text{List}(a_1, a_2, \ldots, a_{k+1}))$.
-- Si $\text{math.max}(b, a_1) = a_1$, entonces $a_1 \geq b$ y
- $a_1 == f(\text{List}(a_1, a_2, \ldots, a_{k+1}))$.
+### 3.4 Aritmética de punto flotante
 
-Por lo tanto, $P_f(L) == f(L)$.
+La asociatividad vale en $\mathbb{R}$, pero no exactamente en los `Double` de IEEE 754: sumar en otro orden puede cambiar los últimos dígitos. Por eso las pruebas comparan las versiones paralelas con una **tolerancia** y no con igualdad exacta. En `pasoParalelo` no hay este problema: no se suma nada, cada posición se calcula con las mismas operaciones, y la igualdad es exacta.
 
-Concluimos por inducción que:
+## 4. Punto 4: trabajo y profundidad
 
-```math
-\forall n \in \mathbb{N} \setminus \{0\} : P_f(\text{List}(a_1, a_2, \ldots, a_n)) == f(\text{List}(a_1, a_2, \ldots, a_n))
-```
+- $W(n)=n$: una operación por partícula. Partir no cambia cuántas se hacen, solo dónde.
+- $D(n,u)=n$ si $n\le u$, y $D(n,u)=1+D(\lceil n/2\rceil,u)$ si $n>u$. Termina porque $\lceil n/2\rceil<n$ para $n\ge2$ (y $u\ge1$ garantiza $n\ge2$ al partir). Sigue la mitad mayor, que es la que tarda más al correr en paralelo.
+- Para $n$ potencia de 2 y $u$ también, hay $\log_2(n/u)$ particiones y queda un tramo de $u$: $D=\log_2(n/u)+u$. Ejemplo: $D(1024,1)=10+1=11$ y $D(1024,512)=1+512=513$.
+- $T_p(n,u)=D(n,u)+W(n)/p$.
 
-## 2. Argumentar la corrección de programas iterativos
+## 5. Punto 5
 
-Para argumentar la corrección de programas iterativos, se debe formalizar cómo
-es la iteración. Esto implica definir:
-
-- Cómo se representa un estado de la iteración, $s$.
-- Cuál es el estado inicial, $s_0$.
-- Cuál es el estado final (o cómo se reconoce que un estado es final): $s_f$.
-- Qué condición (o predicado) cumple todo estado: $\text{Inv}(s)$ (invariante
-  de la iteración).
-- El mecanismo para pasar de un estado al siguiente: $\text{transformar}(s)$.
-  Si $s_i$ es el estado $i$, entonces $\text{transformar}(s_i) = s_{i+1}$.
-
-Un programa iterativo tiene la siguiente forma:
-
-```scala
-def Pf(a: A): B = { // Pf recibe a de tipo A, y devuelve f(a) de tipo B
-  def Pf_iter(s: Estado): B =
-    if (esFinal(s)) respuesta(s) else Pf_iter(transformar(s))
-  Pf_iter(s0)
-}
-```
-
-Demostración de corrección:
-
-- $\text{Inv}(s_0)$: el estado inicial cumple la condición invariante.
-- Si $(s_i \neq s_f \land \text{Inv}(s_i)) \rightarrow \text{Inv}(\text{transformar}(s_i))$:
-  el nuevo estado cumple la condición invariante si el estado anterior la
-  cumplía.
-- De lo anterior se concluye $\text{Inv}(s_f)$, es decir, el estado final
-  cumple la condición invariante. Luego,
-  $\text{Inv}(s_f) \rightarrow \text{respuesta}(s_f) == f(a)$.
-- Finalmente, demostrar que siempre se llega al estado final $s_f$. Esto
-  implica que
-  $P_f(a) == \text{iter}(s_0) == \text{respuesta}(s_f) == f(a)$.
-
-### Ejemplo: factorial iterativo
-
-Considere el siguiente programa iterativo en Scala para calcular la función
-factorial:
-
-```scala
-def Pf(n: Int): Int = { // Pf recibe n de tipo Int, y devuelve n! de tipo Int
-  def Pf_iter(i: Int, n: Int, ac: Int): Int =
-    if (i > n) ac else Pf_iter(i + 1, n, i * ac)
-  Pf_iter(1, n, 1)
-}
-```
-
-Este programa implementa el siguiente proceso iterativo:
-
-- Un estado $s = (i, n, ac)$.
-- El estado inicial es $s_0 = (1, n, 1)$.
-- $(i, n, ac)$ es final si $i > n$, o lo que es lo mismo, si $i = n + 1$.
-- La invariante de ciclo es
-  $\text{Inv}(i, n, ac) \equiv i \leq n + 1 \land ac = (i-1)!$.
-  La invariante de ciclo es una relación que SIEMPRE se cumple en el ciclo.
-- $\text{transformar}((i, n, ac)) = (i+1, n, i \ast ac)$.
-
-Ahora, demostramos los puntos mencionados:
-
-**1.** $\text{Inv}(s_0)$: el estado inicial cumple la condición invariante.
-
-```math
-s_0 = (1, n, 1) \implies 1 \leq n + 1 \land 1 = 0!
-```
-
-**2.** La invariante se mantiene con la transformación de estados,
-$(s_i \neq s_f \land \text{Inv}(s_i)) \rightarrow \text{Inv}(\text{transformar}(s_i))$:
-
-1. Primer cambio, $i = i + 1$, lo que implica $ac = ((i+1) - 1)! = i!$.
-2. Segundo cambio, $ac = i \ast ac$, entonces $ac = (i - 1)! \ast i = i!$.
-3. Como se puede ver en ambos cambios indicados en la transformación, la
-   invariante se mantiene.
-
-**3.** $\text{Inv}(s_f) \rightarrow \text{respuesta}(s_f) == f(a)$
-
-```math
-(n + 1 \leq n + 1) \land ac = ((n+1)-1)! \rightarrow ac == n!
-```
-
-**4.** En cada paso, la componente $i$ del estado incrementa, acercándose a $n+1$.
-Después de $n$ iteraciones, se alcanza $n+1$.
-
-Esto implica que $P_f(n) == \text{iter}(1, n, 1) == n!$
-
-### Ejemplo: el máximo de una lista
-
-Se desea calcular el máximo de una lista de enteros positivos, no vacía. Sea
-$f : \text{List}[\mathbb{N}] \to \mathbb{N}$ la función que calcula ese valor.
-Y sea $P_f$ el siguiente programa en Scala:
-
-```scala
-def maxIt(l: List[Int]): Int = {
-  def maxAux(max: Int, l: List[Int]): Int = {
-    if (l.isEmpty) max
-    else maxAux(math.max(max, l.head), l.tail)
-  }
-  maxAux(l.head, l.tail)
-}
-```
-
-Este programa implementa el siguiente proceso iterativo:
-
-- Un estado $s = (max, l)$ donde $l = \text{List}(a_i, a_{i+1}, \ldots, a_k)$
-  es una cola de $L$.
-- El estado inicial es
-  $s_0 = (L.\text{head}, L.\text{tail}) = (a_1, \text{List}(a_2, \ldots, a_k))$.
-- $s = (max, l)$ es final si $l$ es vacía.
-- $\text{Inv}(max, l) \equiv l = \text{List}(a_i, a_{i+1}, \ldots, a_k) \land max = f(\text{List}(a_1, a_2, \ldots, a_{i-1}))$.
-- $\text{transformar}((max, l)) = (nmax, l.\text{tail})$ donde $nmax = max$ si
-  $max \geq l.\text{head}$, y $nmax = l.\text{head}$ si no.
-
-Demostración de los puntos:
-
-**1.** $\text{Inv}(s_0)$: el estado inicial cumple la condición invariante.
-
-```math
-s_0 = (a_1, \text{List}(a_2, \ldots, a_k)) \implies a_1 = f(\text{List}(a_1))
-```
-
-**2.** $(s_i \neq s_f \land \text{Inv}(s_i)) \rightarrow \text{Inv}(\text{transformar}(s_i))$
-
-```math
-\neg\, l.\text{isEmpty} \land l = \text{List}(a_i, a_{i+1}, \ldots, a_k) \land max = f(\text{List}(a_1, a_2, \ldots, a_{i-1}))
-```
-
-```math
-\rightarrow l.\text{tail} = \text{List}(a_{i+1}, \ldots, a_k) \land nmax = f(\text{List}(a_1, \ldots, a_i))
-```
-
-**3.** $\text{Inv}(s_f) \rightarrow \text{respuesta}(s_f) == f(a)$
-
-```math
-\text{Inv}((max, \text{List}())) \rightarrow max = f(\text{List}(a_1, \ldots, a_k))
-```
-
-**4.** En cada paso, la lista $l$ se reduce, acercándose a ser vacía. Después de
-$k$ iteraciones, $l = \text{List}()$.
-
-Esto implica que $P_f(L) == \text{maxAux}(L.\text{head}, L.\text{tail}) == f(L)$
+- `aceleracion` es el cociente $S=T_{sec}/T_{par}$; $S=1$ si ambos tiempos son iguales.
+- `umbralConveniente` devuelve el $u^\*=\arg\min_{u\in U} t(u)$ sobre los candidatos $U$ y $|s|$ si $U=\varnothing$. Como se mide con calentamiento de la JVM, el resultado es el de menor tiempo medido; pequeñas diferencias entre umbrales cercanos pueden ser ruido de la máquina.
