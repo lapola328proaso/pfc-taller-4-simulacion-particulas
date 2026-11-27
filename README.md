@@ -15,8 +15,8 @@ parte de la entrega: si falta alguno, la entrega se sanciona con el 20 % de
 la nota.
 
 | Nombre completo | Código |
-|---|---|
-| | |
+|Juan Manuel Polania Navarro|202477452|
+|Kevin Santiago Palomino Murcia|202477200|
 | | |
 | | |
 | | |
