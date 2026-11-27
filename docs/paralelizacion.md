@@ -1,199 +1,108 @@
-# Suma de potencias sobre un arreglo, repartida con `parallel`
+# Informe de paralelización
 
-## El cálculo
+> **Antes de entregar:** revise las secciones 3 y 4, ajústelas con sus propias palabras y complete lo marcado `COMPLETAR`. Las explicaciones de los costos son hipótesis razonables; no se midieron por separado.
 
-`sumSegment` recorre un tramo del arreglo y acumula la potencia `p` de cada
-elemento. Es una recursión de cola con acumulador.
+## 1. Estrategia de reparto
 
-```Scala
-def power(x: Int, p: Double): Double =
-  math.pow(math.abs(x.toDouble), p)
+- **Dónde se reparte.** En los tres cálculos sobre $n$ partículas: `pasoParalelo`, `energiaParalela` y `centroDeMasaParalelo`. Cada partícula se calcula sin depender de las demás, y las magnitudes globales se obtienen combinando resultados parciales.
+- **Con qué abstracción.** `parallel(tramoIzquierdo, tramoDerecho)` del paquete `common`: parte el tramo $[a,b)$ por la mitad en $\mu = a + \lfloor (b-a)/2\rfloor$ y resuelve las dos mitades a la vez.
+- **Criterio para dejar de partir.** Cuando el tramo tiene a lo sumo `umbral` elementos se resuelve en secuencial con el mismo primitivo (`pasoSegmento`, o un `foldLeft` sobre el tramo). Un umbral igual o mayor que $n$ no reparte nada.
+- **Operación que combina.**
+    - `pasoParalelo`: concatenación `izq ++ der`, que conserva el orden. Es asociativa.
+    - `energiaParalela`: suma de `Double`.
+    - `centroDeMasaParalelo`: suma componente a componente del par (suma ponderada, masa); la división va una sola vez al final. Es asociativa con neutro $((0,0),0)$ (ver `correccion.md`).
+- **Equidad de la comparación.** `pasoSecuencial` es `pasoSegmento(s, dt, 0, n)` y las hojas de `pasoParalelo` llaman a ese mismo `pasoSegmento`. Así, con `umbral = n`, ambas hacen exactamente el mismo trabajo y la aceleración debe dar $\approx 1$.
 
-def sumSegment(a: Array[Int], p: Double, s: Int, t: Int): Double = {
-  def aux(i: Int, acc: Double): Double =
-    if (i >= t) acc
-    else aux(i + 1, acc + power(a(i), p))
-  aux(s, 0.0)
+### El reparto en código
+
+```scala
+def pasoParalelo(s: Sistema, dt: Double, umbral: Int): Sistema = {
+  val u = math.max(1, umbral)
+  def rec(desde: Int, hasta: Int): Sistema =
+    if (hasta - desde <= u) pasoSegmento(s, dt, desde, hasta)
+    else {
+      val medio = desde + (hasta - desde) / 2
+      val (izq, der) = parallel(rec(desde, medio), rec(medio, hasta))
+      izq ++ der
+    }
+  rec(0, s.length)
 }
 ```
 
-En notación matemática, con el tramo entre `s` incluido y `t` excluido:
-
-```math
-\text{sumSegment}(a, p, s, t) = \sum_{i=s}^{t-1} |a_i|^{\,p}
-```
-
-Sobre ese cálculo hay dos versiones que dividen el tramo a la mitad mientras
-pase del umbral. La diferencia entre las dos es una línea: dónde una resuelve
-las dos mitades una tras otra, la otra las entrega a `parallel`.
-
-```Scala
-def segmentRecSec(a: Array[Int], p: Double, s: Int, t: Int, umbral: Int): Double =
-  if (t - s <= umbral) sumSegment(a, p, s, t)
-  else {
-    val m = s + (t - s) / 2
-    val sum1 = segmentRecSec(a, p, s, m, umbral)
-    val sum2 = segmentRecSec(a, p, m, t, umbral)
-    sum1 + sum2
-  }
-
-def segmentRecPar(a: Array[Int], p: Double, s: Int, t: Int, umbral: Int): Double =
-  if (t - s <= umbral) sumSegment(a, p, s, t)
-  else {
-    val m = s + (t - s) / 2
-    val (sum1, sum2) = parallel(
-      segmentRecPar(a, p, s, m, umbral),
-      segmentRecPar(a, p, m, t, umbral))
-    sum1 + sum2
-  }
-```
-
-## La estrategia de reparto
-
-El tramo se parte por la mitad en `m`, y cada mitad se resuelve sin mirar la
-otra: ningún índice aparece en las dos y ninguno se queda por fuera, porque un
-tramo va de `s` a `m` y el otro de `m` a `t`. Por debajo del umbral ya no se
-parte y el tramo se resuelve con `sumSegment`.
-
-Lo que combina los resultados parciales es la suma, y la suma es asociativa:
-
-```math
-\left(\sum_{i=s}^{m-1} |a_i|^{\,p}\right) + \left(\sum_{i=m}^{t-1} |a_i|^{\,p}\right)
-= \sum_{i=s}^{t-1} |a_i|^{\,p}
-```
-
-Por eso el orden en que terminen las dos mitades no cambia el resultado, y por
-eso se pueden repartir. El árbol de llamados para un arreglo de ocho elementos
-con umbral 2 queda así, con las hojas resolviendo en secuencial:
+Cada mitad se resuelve sin mirar la otra: ningún índice aparece en las dos y ninguno se queda por fuera, porque un tramo va de `desde` a `medio` y el otro de `medio` a `hasta`. Para un sistema de ocho partículas con umbral 2, el árbol de llamados es:
 
 ```mermaid
 graph TD
     A["0 a 8: parallel"] --> B["0 a 4: parallel"]
     A --> C["4 a 8: parallel"]
-    B --> D["0 a 2: sumSegment"]
-    B --> E["2 a 4: sumSegment"]
-    C --> F["4 a 6: sumSegment"]
-    C --> G["6 a 8: sumSegment"]
+    B --> D["0 a 2: pasoSegmento"]
+    B --> E["2 a 4: pasoSegmento"]
+    C --> F["4 a 6: pasoSegmento"]
+    C --> G["6 a 8: pasoSegmento"]
 ```
 
-## Cómo se tomaron los tiempos
+## 2. Tabla de tiempos
 
-Cada cifra sale de ScalaMeter, la librería con que mide el curso:
-`withWarmer(new Warmer.Default) measure { ... }` ejecuta el bloque hasta que la
-máquina virtual se estabiliza y solo entonces mide, porque las primeras
-corridas miden una versión del programa que el compilador interno todavía está
-optimizando. Cada tiempo es la mediana de cinco mediciones y al lado va la
-desviación de esas cinco, que dice cuánto se movió el reloj de una a otra.
+- Máquina: `COMPLETAR` (modelo de CPU, RAM y sistema operativo; Windows).
+- **Núcleos disponibles** (`Runtime.getRuntime.availableProcessors`): **12**, es decir $p=12$.
+- Medición: se usó una medición propia en lugar de `withWarmer(new Warmer.Default) measure` para la tabla, porque ScalaMeter mide cada versión por separado y en nuestra primera corrida la fila de control, donde las dos versiones son iguales, dio 0,72, 1,35 y 1,02 en vez de 1. `App.scala` alterna `pasoSecuencial` y `pasoParalelo` en 21 corridas, libera memoria (`System.gc()`) antes de cada una, descarta las 4 primeras (calentamiento) y toma la **mediana** en ms. Alternar las dos versiones hace que el ruido de la máquina las afecte por igual; por eso el tiempo secuencial cambia un poco de fila en fila.
+- *Aceleración estimada* $= n / T_p(n,u)$ con `tiempoEstimado` del punto 4. *Fracción serial* $=(p/S-1)/(p-1)$.
 
-```Scala
-import org.scalameter._
+| n | umbral | t secuencial (ms) | t paralelo (ms) | aceleración medida | aceleración estimada | fracción serial (Amdahl) |
+|---|---|---|---|---|---|---|
+| 1000000 | 100 | 20,47 | 66,56 | 0,31 | 11,99 | 3,457 |
+| 1000000 | 1000 | 18,24 | 58,91 | 0,31 | 11,86 | 3,432 |
+| 1000000 | 10000 | 16,04 | 54,63 | 0,29 | 10,97 | 3,625 |
+| 1000000 | 100000 | 14,58 | 19,32 | 0,75 | 6,86 | 1,355 |
+| 1000000 | 1000000 (control) | 14,72 | 14,87 | 0,99 | 0,92 | 1,011 |
+| 2000000 | 100 | 30,54 | 125,66 | 0,24 | 11,99 | 4,398 |
+| 2000000 | 1000 | 30,34 | 117,35 | 0,26 | 11,93 | 4,129 |
+| 2000000 | 10000 | 30,70 | 110,96 | 0,28 | 11,46 | 3,853 |
+| 2000000 | 100000 | 28,91 | 43,29 | 0,67 | 8,73 | 1,542 |
+| 2000000 | 2000000 (control) | 29,04 | 28,67 | 1,01 | 0,92 | 0,986 |
+| 3000000 | 100 | 44,29 | 189,52 | 0,23 | 11,99 | 4,577 |
+| 3000000 | 1000 | 57,43 | 184,33 | 0,31 | 11,96 | 3,411 |
+| 3000000 | 10000 | 45,35 | 168,34 | 0,27 | 11,72 | 3,959 |
+| 3000000 | 100000 | 45,38 | 68,93 | 0,66 | 8,73 | 1,566 |
+| 3000000 | 3000000 (control) | 42,88 | 43,28 | 0,99 | 0,92 | 1,010 |
 
-def medir[A](repeticiones: Int)(cuerpo: => A): Double = {
-  val muestras = Vector.fill(repeticiones) {
-    (withWarmer(new Warmer.Default) measure { cuerpo }).value
+```scala
+def medirPar(a: => Any, b: => Any): (Double, Double) = {
+  def tiempo(f: => Any): Double = {
+    System.gc()
+    val t0 = System.nanoTime()
+    val _ = f
+    (System.nanoTime() - t0) / 1e6
   }
-  muestras.sorted.apply(muestras.length / 2)
-}
-
-def desviacion(ts: List[Double]): Double = {
-  val media = ts.sum / ts.size
-  math.sqrt(ts.map(t => (t - media) * (t - media)).sum / ts.size)
+  def mediana(xs: List[Double]): Double = xs.sorted.apply(xs.length / 2)
+  val corridas = List.fill(21)((tiempo(a), tiempo(b))).drop(4)
+  (mediana(corridas.map(_._1)), mediana(corridas.map(_._2)))
 }
 ```
 
-La dependencia ya viene en `app/build.gradle` del repositorio:
+**Control.** Con umbral igual a $n$ no se reparte nada y las dos versiones ejecutan el mismo `pasoSegmento`. La aceleración medida fue 0,99, 1,01 y 0,99, es decir 1 dentro del ruido. Por eso la comparación es confiable. (En una medición anterior, que no alternaba las corridas, el control daba 0,72, 1,35 y 1,02, y se descartó por esa razón.)
 
-```groovy
-implementation 'com.storm-enroute:scalameter-core_2.13:0.21'
-```
+## 3. Comparación con la estimación del punto 4
 
-Las dos versiones recorren el arreglo con la misma función, así que la
-diferencia de tiempos es la del reparto. La medición con el umbral igual al
-tamaño del arreglo sirve de control: ahí `segmentRecPar` no parte nada y su
-tiempo tiene que ser el de `segmentRecSec`.
+El modelo es $T_p(n,u)=D(n,u)+n/p$. Con $p=12$ predice aceleraciones de 11 a 12 para los umbrales pequeños y de 7 a 9 para $u=100000$.
 
-La máquina tiene 16 núcleos. Los arreglos llevan enteros entre 1 y 100, la
-potencia que se suma es 2 y los tiempos están en milisegundos.
+**En qué se parece.** En una sola cosa: la tendencia de los umbrales grandes. En los dos modelos, pasar de $u=100$ a $u=100000$ mejora la aceleración. En la medición sube de 0,23–0,31 a 0,66–0,75; en el modelo baja de 12 a 7–9 (el modelo penaliza el tramo secuencial que queda). Más allá de eso, no coinciden.
 
-## Las mediciones
+**En qué no se parece.** El modelo predice una ganancia grande y la medición da una pérdida en todos los umbrales: $0{,}23\le S\le0{,}75$ frente a $S\approx7$–$12$. Además, el modelo da 0,92 en el control cuando la realidad es 1, porque suma $n/p$ al tramo que no se partió (no divide el trabajo que no se repartió). Atribuyo la diferencia a costos que el modelo no cuenta:
 
-Con el umbral fijo en 1024, según el tamaño del arreglo:
+- **Crear y esperar tareas.** El modelo da por gratis cada `parallel`. Con $u=100$ en un millón de partículas hay unas 10.000 hojas y más de 20.000 tareas.
+- **Copias al concatenar.** `izq ++ der` copia los elementos en cada nivel del árbol: del orden de $n\log_2(n/u)$ copias que el secuencial no hace.
+- **Memoria y recolector de basura.** Cada paso crea millones de objetos nuevos. Reservarlos y recolectarlos es parte del costo y no se reparte bien entre núcleos, además de saturar el ancho de banda de memoria.
+- **Cálculo demasiado pequeño.** Cada partícula son unas pocas sumas y productos (menos de 20 ns), mucho menos que el costo de organizar el reparto.
 
-| n | Secuencial | Desv. | Paralela | Desv. | Aceleración |
-|---:|---:|---:|---:|---:|---:|
-| 100 000 | 0,5 | 0,3 | 0,4 | 0,1 | 1,43 |
-| 1 000 000 | 2,4 | 0,1 | 1,0 | 0,1 | 2,30 |
-| 5 000 000 | 12,2 | 0,2 | 2,4 | 0,1 | 5,11 |
-| 20 000 000 | 48,7 | 1,0 | 8,3 | 0,3 | 5,84 |
+Estas causas son hipótesis coherentes con los datos (el costo crece cuando el umbral baja, que es cuando hay más tareas y más niveles de copia), pero no las medí por separado.
 
-Con el arreglo fijo en 5 000 000 de elementos, según el umbral. La última
-columna es la aceleración que predice la estimación de trabajo y profundidad,
-calculada como el trabajo total dividido entre el tiempo estimado para 16
-núcleos:
+## 4. Lectura de los resultados
 
-| Umbral | Particiones | Paralela | Desv. | Aceleración | Aceleración estimada |
-|---:|---:|---:|---:|---:|---:|
-| 5 000 000 | 0 | 12,4 | 0,2 | 0,98 | 0,94 |
-| 1 250 000 | 2 | 3,3 | 0,1 | 3,73 | 3,20 |
-| 312 500 | 4 | 2,2 | 0,1 | 5,54 | 8,00 |
-| 78 125 | 6 | 1,9 | 0,1 | **6,45** | 12,80 |
-| 19 531 | 9 | 2,1 | 0,1 | 5,76 | 15,51 |
-| 4 883 | 10 | 2,2 | 0,1 | 5,46 | 15,75 |
-| 1 024 | 13 | 2,2 | 0,0 | 5,45 | 15,97 |
-| 256 | 15 | 2,2 | 1,0 | 5,56 | 15,99 |
+1. **Umbral conveniente.** `COMPLETAR con sus palabras.` Entre los umbrales que sí reparten, el mejor fue $u=100000$ (aceleración 0,66 a 0,75), y entre más pequeño el umbral, peor. Ninguno superó al secuencial, así que en esta implementación y en esta máquina **el umbral conveniente es el que no reparte** ($u=n$, aceleración 1). Un umbral pequeño crea demasiadas tareas y copias, y uno muy grande deja núcleos sin trabajo; lo conveniente sería un valor intermedio que aquí no existe porque el costo fijo del reparto supera lo que ahorra el cálculo de cada partícula.
+2. **Por qué la aceleración no crece al agregar núcleos.** Según la ley de Amdahl, si una fracción $f_s$ del cálculo no se reparte,
 
-El tiempo secuencial de referencia de esta segunda tabla es 12,2 ms, con
-desviación 0,1.
+   $$S(p)=\frac{1}{f_s+\dfrac{1-f_s}{p}}\;\xrightarrow[p\to\infty]{}\;\frac{1}{f_s}.$$
 
-Las dos tablas salen de corridas distintas, y por eso la fila de 5 000 000 con
-umbral 1024 da 2,4 ms en la primera y 2,2 ms en la segunda. Esas dos décimas
-son el ruido de la medida, y hay que tenerlas presentes al comparar dos filas
-parecidas.
-
-## Lo que dicen los números
-
-El control responde lo que debía: con umbral 5 000 000 la aceleración es 0,98,
-el mismo tiempo de la versión secuencial. Una cifra bastante mayor que 1 en esa
-fila diría que las dos versiones no están haciendo el mismo trabajo y que la
-comparación no mide el reparto.
-
-Repartir paga cuando hay con qué pagarlo. Con 100 000 elementos la aceleración
-apenas llega a 1,43 y el arreglo entero se recorre en medio milisegundo: crear
-los llamados cuesta casi tanto como el cálculo. A 5 000 000 la aceleración sube
-a 5,11, y a 20 000 000 a 5,84.
-
-El umbral que más conviene no es el más pequeño. El mejor tiempo está en
-78 125, que son seis particiones y 64 tramos para 16 núcleos. De 19 531 hacia
-abajo la aceleración baja a 5,5 y se queda ahí: cada partición agrega dos
-llamados que hay que repartir, y por debajo de cierto tamaño ese costo ya no se
-recupera con el tramo que se ahorra.
-
-La estimación del punto 4 y la medición coinciden donde no se parte nada y se
-separan en cuanto se parte. En la fila de control las dos dan 1. De ahí en
-adelante la estimación crece hasta 15,99 mientras la medición se queda en 6,45.
-La estimación cuenta operaciones y supone que los 16 núcleos están siempre
-ocupados y que crear un llamado no cuesta nada; el reloj incluye el costo de
-repartir, el acceso a una memoria que comparten todos los núcleos y lo que la
-máquina esté haciendo al lado. Sirve como techo y para comparar umbrales entre
-sí, no como pronóstico del reloj.
-
-Con la aceleración medida de 6,45 sobre 16 núcleos, la ley de Amdahl da la
-fracción del cálculo que corre en serie, con p el número de núcleos:
-
-```math
-S(p) = \frac{1}{f + \frac{1 - f}{p}}
-\qquad\Longrightarrow\qquad
-f = \frac{\frac{1}{S} - \frac{1}{p}}{1 - \frac{1}{p}} = 0{,}099
-```
-
-Un décimo del cálculo corre en serie, y con ese décimo el techo es 10 por
-muchos núcleos que se agreguen:
-
-| p | 2 | 4 | 8 | 16 | 32 | ∞ |
-|---|---:|---:|---:|---:|---:|---:|
-| Aceleración máxima | 1,82 | 3,09 | 4,73 | 6,45 | 7,88 | 10,1 |
-
-Pasar de 16 a 32 núcleos agregaría 1,4 a la aceleración, menos de lo que se
-ganó entre 4 y 8. En este cálculo esa décima parte está en partir el arreglo y
-combinar los resultados, y en el acceso a una memoria que comparten los
-dieciséis núcleos.
+   Aquí hay además un costo que **crece** con el reparto (tareas, copias, memoria). Por eso agregar núcleos o partir más no mejora: parte del tiempo se gasta en coordinar y en memoria, que no se divide entre núcleos. `COMPLETAR con sus palabras.`
+3. **Fracción no repartida.** Con $f_s=(p/S-1)/(p-1)$ y $p=12$, el mejor umbral ($u=100000$) da $f_s\approx1{,}36$, $1{,}54$ y $1{,}57$ para 1, 2 y 3 millones. Una fracción mayor que 1 no es una fracción del cálculo: significa que el reparto **agrega** trabajo y no solo deja parte sin repartir. Lo que sí se puede decir es que, para este cálculo, prácticamente nada del tiempo se beneficia del reparto, y por eso $1/f_s<1$, es decir, no hay techo de ganancia sino pérdida.
